@@ -290,7 +290,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("You don't have permission to use this command.")
     elif isinstance(error, commands.CommandNotFound):
-        return  # Ignore unknown commands
+        return
     else:
         print(f"Command error: {error}")
         await ctx.send("An error occurred while executing the command.")
@@ -298,10 +298,9 @@ async def on_command_error(ctx, error):
 # Run the bot
 if __name__ == "__main__":
    
-    TOKEN = ('not_my_real_token')
+    TOKEN = ('not_my_token')
     
     if not TOKEN:
-        print("Please set your bot token in the DISCORD_BOT_TOKEN environment variable")
-        print("Or replace the TOKEN variable with your actual bot token")
+        print("missing token goober.")
     else:
-        bot.run(TOKEN) #its hard coded in lol
+        bot.run(TOKEN) #token is hard coded on my end.
