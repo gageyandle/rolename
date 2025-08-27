@@ -3,17 +3,18 @@ from discord.ext import commands
 import asyncio
 import json
 import os
+import yt_dlp   # for audio extraction
+import time
+from discord import app_commands
 
-# Bot configuration
+# Bot config
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-
 CONFIG_FILE = 'bot_config.json'
-
 
 default_config = {
     "auto_roles": [],  
@@ -26,7 +27,6 @@ default_config = {
 }
 
 def load_config():
-    """Load configuration from file or create default"""
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r') as f:
@@ -37,22 +37,13 @@ def load_config():
         return default_config.copy()
 
 def save_config(config):
-    """Save configuration to file"""
     with open(CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
 
 @bot.event
-async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
-    print(f'Bot is in {len(bot.guilds)} guilds')
-
-@bot.event
 async def on_member_join(member):
-    """Handle when a new member joins the server"""
     config = load_config()
-    
     try:
-   
         if config["auto_roles"]:
             roles_to_add = []
             for role_id in config["auto_roles"]:
@@ -66,7 +57,6 @@ async def on_member_join(member):
                 await member.add_roles(*roles_to_add, reason="Auto-role on join")
                 print(f"Added {len(roles_to_add)} roles to {member.display_name}")
 
-     
         if config["auto_nickname"]["enabled"]:
             try:
                 nickname = config["auto_nickname"]["format"].format(
@@ -76,7 +66,6 @@ async def on_member_join(member):
                 )
                 await member.edit(nick=nickname, reason="Auto-nickname on join")
                 
-                # Increment counter
                 config["auto_nickname"]["counter"] += 1
                 save_config(config)
                 
@@ -86,7 +75,6 @@ async def on_member_join(member):
             except Exception as e:
                 print(f"Error renaming {member.name}: {e}")
 
-        
         if config["welcome_channel"]:
             channel = bot.get_channel(config["welcome_channel"])
             if channel:
@@ -101,27 +89,61 @@ async def on_member_join(member):
     except Exception as e:
         print(f"Error in on_member_join: {e}")
 
+# --- MUSIC SYSTEM ---
+def get_audio_source(url):
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "default_search": "auto"
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info["url"], info.get("title", "Unknown Title")
+
+@bot.command()
+async def play(ctx, url: str):
+    if ctx.author.voice is None:
+        await ctx.send("You must be in a voice channel first!")
+        return
+
+    channel = ctx.author.voice.channel
+
+    if ctx.voice_client is None:
+        await channel.connect()
+    else:
+        await ctx.voice_client.move_to(channel)
+
+    stream_url, title = get_audio_source(url)
+
+    vc = ctx.voice_client
+    if vc.is_playing():
+        vc.stop()
+
+    ffmpeg_opts = {"options": "-vn"}
+    vc.play(discord.FFmpegPCMAudio(stream_url, **ffmpeg_opts))
+
+    await ctx.send(f"Now playing: **{title}**")
+
+@bot.command()
+async def stop(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        await ctx.send("Stopped and disconnected.")
+
+# --- AUTO-ROLE, NICKNAME, WELCOME COMMANDS ---
 @bot.command(name='setup_autorole')
 @commands.has_permissions(administrator=True)
 async def setup_autorole(ctx, *role_names):
-    """Set up auto-roles by role names or IDs
-    Usage: !setup_autorole @Role1 @Role2 or !setup_autorole "Role Name" "Another Role"
-    """
     config = load_config()
     role_ids = []
     
     for role_input in role_names:
-
         role = None
-        
-     
         if role_input.startswith('<@&') and role_input.endswith('>'):
             role_id = int(role_input[3:-1])
             role = ctx.guild.get_role(role_id)
-       
         elif role_input.isdigit():
             role = ctx.guild.get_role(int(role_input))
-    
         else:
             role = discord.utils.get(ctx.guild.roles, name=role_input)
         
@@ -140,10 +162,6 @@ async def setup_autorole(ctx, *role_names):
 @bot.command(name='setup_nickname')
 @commands.has_permissions(administrator=True)
 async def setup_nickname(ctx, enabled: bool = True, *, format_string = "New Member {count}"):
-    """Set up auto-nicknames
-    Usage: !setup_nickname True "Welcome {username}!" 
-    Available placeholders: {count}, {username}, {discriminator}
-    """
     config = load_config()
     config["auto_nickname"]["enabled"] = enabled
     config["auto_nickname"]["format"] = format_string
@@ -157,28 +175,17 @@ async def setup_nickname(ctx, enabled: bool = True, *, format_string = "New Memb
 @bot.command(name='setup_welcome')
 @commands.has_permissions(administrator=True)
 async def setup_welcome(ctx, channel: discord.TextChannel = None):
-    """Set up welcome channel
-    Usage: !setup_welcome #channel-name
-    """
     config = load_config()
-    
     if channel is None:
         channel = ctx.channel
-    
     config["welcome_channel"] = channel.id
     save_config(config)
-    
     await ctx.send(f"Welcome channel set to {channel.mention}")
 
 @bot.command(name='remove_autorole')
 @commands.has_permissions(administrator=True)
 async def remove_autorole(ctx, role_name):
-    """Remove a role from auto-roles
-    Usage: !remove_autorole @Role or !remove_autorole "Role Name"
-    """
     config = load_config()
-    
-
     role = None
     if role_name.startswith('<@&') and role_name.endswith('>'):
         role_id = int(role_name[3:-1])
@@ -198,12 +205,9 @@ async def remove_autorole(ctx, role_name):
 @bot.command(name='view_config')
 @commands.has_permissions(administrator=True)
 async def view_config(ctx):
-    """View current bot configuration"""
     config = load_config()
-    
     embed = discord.Embed(title="Bot Configuration", color=discord.Color.blue())
     
-    # Auto-roles
     if config["auto_roles"]:
         role_names = []
         for role_id in config["auto_roles"]:
@@ -213,7 +217,6 @@ async def view_config(ctx):
     else:
         embed.add_field(name="Auto-Roles", value="None", inline=False)
     
-   
     if config["welcome_channel"]:
         channel = bot.get_channel(config["welcome_channel"])
         channel_name = channel.mention if channel else f"Unknown ({config['welcome_channel']})"
@@ -221,7 +224,6 @@ async def view_config(ctx):
     else:
         embed.add_field(name="Welcome Channel", value="None", inline=False)
     
-  
     nickname_status = "Enabled" if config["auto_nickname"]["enabled"] else "Disabled"
     nickname_format = config["auto_nickname"]["format"]
     nickname_counter = config["auto_nickname"]["counter"]
@@ -236,21 +238,15 @@ async def view_config(ctx):
 @bot.command(name='test_join')
 @commands.has_permissions(administrator=True)
 async def test_join(ctx, member: discord.Member = None):
-    """Test the join event on a specific member (or yourself)
-    Usage: !test_join @member
-    """
     if member is None:
         member = ctx.author
-    
     await on_member_join(member)
     await ctx.send(f"Tested join event for {member.mention}")
 
 @bot.command(name='rename_all')
 @commands.has_permissions(administrator=True)
 async def rename_all(ctx):
-    """Rename all members in the server using the auto-nickname format"""
     config = load_config()
-    
     if not config["auto_nickname"]["enabled"]:
         await ctx.send("Auto-nickname is disabled. Enable it first with `!setup_nickname`.")
         return
@@ -259,7 +255,6 @@ async def rename_all(ctx):
     renamed = 0
     
     for member in ctx.guild.members:
-        # Skip bots
         if member.bot:
             continue
         try:
@@ -277,14 +272,27 @@ async def rename_all(ctx):
         except Exception as e:
             print(f"Error renaming {member.name}: {e}")
     
-    # Update counter in config
     config["auto_nickname"]["counter"] = count
     save_config(config)
-    
     await ctx.send(f"Renamed {renamed} members in this server.")
 
+# --- SLASH COMMAND ---
+@bot.tree.command(name="ping", description="Check bot latency")
+async def ping(interaction: discord.Interaction):
+    start = time.perf_counter()
+    await interaction.response.send_message("Working...")
+    end = time.perf_counter()
+    latency_ms = round((end - start) * 1000)
+    await interaction.edit_original_response(content=f"Working! 🟢 Ping: {latency_ms}ms")
 
-# Error handling
+GUILD_ID = 1409377304458559662
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    guild = discord.Object(id=1409377304458559662)  # replace with your server ID
+    await bot.tree.sync(guild=guild)
+    print(f"Slash commands synced for guild {GUILD_ID}")
+# --- ERROR HANDLING ---
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
@@ -295,12 +303,10 @@ async def on_command_error(ctx, error):
         print(f"Command error: {error}")
         await ctx.send("An error occurred while executing the command.")
 
-# Run the bot
+# --- RUN BOT ---
 if __name__ == "__main__":
-   
-    TOKEN = ('not_my_token')
-    
+    TOKEN = ("NOTMYTOKEN") 
     if not TOKEN:
         print("missing token goober.")
     else:
-        bot.run(TOKEN) #token is hard coded on my end.
+        bot.run(TOKEN)
