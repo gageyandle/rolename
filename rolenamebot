@@ -310,3 +310,6 @@ if __name__ == "__main__":
         print("missing token goober.")
     else:
         bot.run(TOKEN)
+
+#--- add more shit please lol good lord /gage ---
+
